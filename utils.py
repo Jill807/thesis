@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from PIL import Image
 import pandas as pd
 from datetime import datetime, timedelta
+import re
 
 
 class preprocessing:
@@ -45,13 +46,16 @@ class preprocessing:
 
         # Round to nearest hour
         self.image_file['rounded_datetime'] = self.image_file['timestamp'].apply(self.round_to_hour)
-
+        # print(np.unique(self.sensor_data_file['station']))
 
         # Match on Time Stamp
         # print(self.image_file)
         self.labelled_data = pd.merge(self.image_file, self.sensor_data_file, how='left', left_on='rounded_datetime', right_on='datetime')
         # Cleaned data: remove NaNs. If small then downsize dataset to 20%
-        self.labelled_data = self.clean_data(self.labelled_data, small = True)
+        ## --------------------TEMPORARY FILTER ------------------
+        self.filtered_df = self.labelled_data[self.labelled_data['station'] == 'NL10644']
+
+        self.filtered_df = self.clean_data(self.filtered_df, small = True)
 
         # Group by 'rounded_time' and 'FileName' and apply aggregation functions to the grouped data
         # self.grouped_max_pm25 = self.labelled_data.groupby(['rounded_datetime']).agg(
@@ -65,8 +69,9 @@ class preprocessing:
         # self.grouped_max_pm25.reset_index(inplace=True)
 
         # print(self.grouped_max_pm25.head(20))
-
-        return self.labelled_data
+        # print(self.labelled_data)
+        self.filtered_df = self.sequence_generation(self.filtered_df)
+        return self.filtered_df
     
     def round_to_hour(self, dt):
         '''
@@ -83,7 +88,7 @@ class preprocessing:
         Cleans dataset
         '''
         # Keep the columns that I need
-        columns_to_keep = ['File Path', 'pm25', 'timestamp', 'rounded_datetime', 'FileName']
+        columns_to_keep = ['File Path', 'pm25', 'timestamp', 'rounded_datetime', 'FileName', 'datetime', 'station']
         data = data[columns_to_keep]
 
         ## If I want a very small sample to train on I will take 20% of the data
@@ -92,16 +97,20 @@ class preprocessing:
             return sampled_data.dropna().reset_index(drop=True)
         return data.dropna().reset_index(drop=True)
     
-    def small_data(self, data):
-        '''
-        Downsize data
-        '''
+    def sequence_generation(self, data):
+        data['t-1'] = data['File Path'].shift(1)
+        data['t-2'] = data['File Path'].shift(2)
+        data['frame_sequence'] = data['File Path'] + " " + data['t-1'] + " " + data['t-2']
+        data['frame_sequence'] = data['frame_sequence'].apply(lambda x: x.split() if isinstance(x, str) else pd.NA)
+        return data 
         
 
 # print(pd.read_csv('DataEarly2023.csv'))
 pp = preprocessing('2024-03-12/', '12032024_sensor.csv')
 
 labelled_data = pp.match_timestamps()
-
-
+labelled_data = labelled_data.sort_values(by = 'timestamp')
+print(labelled_data)
+sequenced = pp.sequence_generation(labelled_data)
+print(sequenced['frame_sequence'][2])
 
