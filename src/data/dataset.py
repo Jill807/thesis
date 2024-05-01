@@ -1,32 +1,34 @@
-import torch
+import sys
 import os
-from utils import preprocessing
+sys.path.append(os.getcwd())
+import torch
+# from src.features.utils import preprocessing
 from PIL import Image
-import cv2
-from torchvision.io import read_image
-from torchvision import transforms
+import pandas as pd
 
 
 
 class createDataset(torch.utils.data.Dataset):
-    """Tata Steel Dataset"""
+    """Creates Tata Steel Dataset"""
 
     def __init__(self, image_path, sensor_file, transform=None, target_transform = None):
         """
         Arguments:
-            image_path
-            sensor_file
-            transform
+            image_path: path to image folder
+            sensor_file: csv file with sensor data
+            transform: the transformation to apply to the images and target
         """
         self.image_path = image_path
         self.transform = transform
         self.target_transform = target_transform
 
         # Instantiate preprocessing steps
-        self.pp = preprocessing(image_path, sensor_file)
+        # self.pp = preprocessing(image_path, sensor_file)
         
-        #Clean the dataset before making it a tensor. The small parameter downsizes the dataset considerably for testing purposes
-        self.data = self.pp.match_timestamps()
+        # #Clean the dataset before making it a tensor. The small parameter downsizes the dataset considerably for testing purposes
+        # self.data = self.pp.main()
+
+        self.data = pd.read_parquet('output_file.parquet')
 
 
     def __len__(self):
@@ -47,6 +49,7 @@ class createDataset(torch.utils.data.Dataset):
             image = self.transform(image)
             image = torch.squeeze(image)
             li.append(image)
+        # Stack to get multiple time tensors (shape: T,H,W,C)
         seq = torch.stack(li, dim = 0)
 
         # Convert label to torch and float
@@ -54,12 +57,13 @@ class createDataset(torch.utils.data.Dataset):
 
         return seq, label
 
-transform = transforms.Compose([
-    transforms.Resize(size = (224,224))
-    , transforms.ToTensor()]) 
+# transform = transforms.Compose([
+#     transforms.Resize(size = (224,224))
+#     , transforms.ToTensor()]) 
 
-cD = createDataset(image_path='2024-03-12/',
-                                    sensor_file='12032024_sensor.csv', transform = transform, target_transform=None)
+# cD = createDataset(image_path='2024-03-12/',
+#                                     sensor_file='12032024_sensor.csv', transform = transform, target_transform=None)
 
-ex, label = cD.__getitem__(5)
-print(ex.size())
+# ex, label = cD.__getitem__(5)
+# print(ex.size())
+print("Success!")
