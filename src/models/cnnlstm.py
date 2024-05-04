@@ -11,7 +11,8 @@ from src.data.dataset import createDataset
 from torchvision import transforms
 import torch.optim as optim
 import numpy as np
-# from torcheval.metrics import R2Score
+import matplotlib.pyplot as plt
+from torchmetrics.regression import R2Score
 
 
 
@@ -76,7 +77,7 @@ class CNN_LSTM(nn.Module):
 
         return f2_out.squeeze()
  
-    def train_model(self, trainloader, model, loss_fn, optimizer, num_epochs):
+    def train_model(self, trainloader, model, loss_fn, optimizer, num_epochs, checkpoint_epoch):
         """
         Train a PyTorch model and print model performance metrics.
 
@@ -94,13 +95,21 @@ class CNN_LSTM(nn.Module):
             Number of epochs for training the model.
         """
         model.train(True)
-        for epoch in range(num_epochs):  # loop over the dataset multiple times
+        output_file = "losses.txt"
+
+        # if start_epoch > 0:
+        #     resume_epoch = start_epoch - 1
+        #     self.resume(model, f"epoch-{resume_epoch}.pth")
+        for epoch in range(checkpoint_epoch, num_epochs):  # loop over the dataset multiple times
+            print("Epoch:", epoch)
             running_loss = 0.0
             score_arrays= [] # add the field for appending the loss
             for i, data in enumerate(trainloader, 0):
-                print("i:", i)
+                print("Minibatch:", i)
                 # get the inputs; data is a list of [inputs, labels]
                 inputs, labels = data
+                inputs = inputs.to(device)
+                labels = labels.to(device)
                 print("----------------------------------")
                 print("Labels:", labels.size())
                 print("Inputs:", inputs.size())
@@ -115,13 +124,17 @@ class CNN_LSTM(nn.Module):
                 optimizer.step()
                 score_arrays.append(loss.item()) # append the loss
                 # print statistics
+                with open(output_file, "a") as f:
+                    f.write(f"Epoch {epoch + 1}, Loss: {loss}\n")  # Writing each loss value on a separate line
+
                 running_loss += loss.item()
                 if i % 10 == 0:    # print every 10 mini-batches
                     print('[%d, %5d] loss: %.3f' %
                         (epoch + 1, i + 1, running_loss / 10))
                     running_loss = 0.0
+            self.checkpoint(model, f"epoch-{epoch}.pth")
     
-    def evaluate_model(self, dataloader, model):
+    def evaluate_model(self, dataloader, model, num_epochs):
         """
         Evaluate a PyTorch regression model and print model performance metrics.
 
@@ -133,23 +146,72 @@ class CNN_LSTM(nn.Module):
             The PyTorch model that we want to evaluate.
         """
         model.eval() # set the model to evaluation mode
+        r2score = R2Score().to(device)
+        y_predlist = []
+        ylist = []
         # Since we do not want to train the model, make sure that we deactivate the gradients
         with torch.no_grad():
-            metrics = {'mse': [], 'mae': []} # initialize empty lists for metrics
+            metrics = {'mse': [], 'mae': [], 'r2': [], 'rmse': []} # initialize empty lists for metrics
             # Loop through the dataloader
             for x, y in dataloader:
+                x = x.to(device)
+                y = y.to(device)
                 y_pred = model(x) # make predictions using the model
+                ylist.append(y)
+                y_predlist.append(y_pred)
                 # Compute evaluation metrics
                 mse = torch.mean((y_pred - y)**2).item() # mean squared error
                 mae = torch.mean(torch.abs(y_pred - y)).item() # mean absolute error
+                rmse = torch.sqrt(torch.tensor(mse))
+                # r2 = r2score(y_pred, y)
                 # Append the evaluation metrics to the lists
                 metrics['mse'].append(mse)
                 metrics['mae'].append(mae)
-        # Print the averaged evaluation metrics
+                # metrics['r2'].append(r2)
+                metrics['rmse'].append(rmse)
+            y_pred_tensor = torch.cat(y_predlist, dim=0)
+            y_tensor = torch.cat(ylist, dim=0)
+            r2 = r2score(y_pred_tensor, y_tensor)
+            # Print the averaged evaluation metrics
+            with open("metrics.txt", "w") as f:
+                # Write the metrics to the file
+                f.write("MSE: {}\n".format(mse))
+                f.write("MAE: {}\n".format(mae))
+                f.write("RMSE: {}\n".format(rmse.item()))  
+                f.write("R2 Score: {}\n".format(r2.item()))  
+
+        print(metrics['mse'])
+        print(len(metrics))
         print("="*40)
         print("Evaluate model performance:")
         for metric_name, values in metrics.items():
             print("Averaged %s: %.4f" % (metric_name.upper(), np.mean(values)))
+
+        #---------------------PLOTTING----------------------------#
+        # Plot MSE
+        plt.plot(range(1,len(metrics['mse'])+1), metrics['mse'], label='MSE', color='blue')
+        # Plot MAE
+        plt.plot(range(1,len(metrics['mae'])+1), metrics['mae'], label='MAE', color='red')
+
+        # Add labels and title
+        plt.title('MSE and MAE Over Epochs')
+        plt.xlabel('Epochs')
+        plt.ylabel('Loss')
+        plt.legend()
+        plt.grid(True)
+        plt.savefig('foo.png')
+        print("Plot updated")
+        
+    def checkpoint(self, model, filename):
+        torch.save({
+            'optimizer': optimizer.state_dict(),
+            'model': model.state_dict(),
+        }, filename)
+    
+    def resume(self, model, filename): 
+        checkpoint = torch.load(filename)
+        model.load_state_dict(checkpoint['model'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
 
 transform = transforms.Compose([
     transforms.Resize(size = (224,224))
@@ -165,23 +227,35 @@ train_set, test_set = torch.utils.data.random_split(cD, [int(0.8*len(cD)), len(c
 train_set[0][0].size()
 
 
-trainloader = DataLoader(train_set, batch_size=10,
+trainloader = DataLoader(train_set, batch_size=16,
+                        shuffle=True, num_workers=0)
+testloader = DataLoader(test_set, batch_size=4,
                         shuffle=True, num_workers=0)
 
-testloader = DataLoader(test_set, batch_size=10,
-                        shuffle=True, num_workers=0)
 
 
-
-model = CNN_LSTM(512*7*7,2,1).to(device)
+model = CNN_LSTM(512*7*7 , 8, 1).to(device)
 print(model)
+# Try commit
+# Define the path to the saved model state dictionary
+# path_to_saved_model = "epoch-49.pth"  # Replace with the actual path to your saved model
+
+# Load the model state dictionary
+# checkpoint = torch.load(path_to_saved_model, map_location=torch.device('cpu'))
+
+# Load weights into the model
+# model.load_state_dict(checkpoint['model'])
+# Optionally, move the model to the GPU if available
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model = model.to(device)
 
 # Initialize the loss function
 loss_fn = nn.MSELoss()  # mean square error
-learning_rate = 1e-3
+learning_rate = 1e-4
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-epochs = 2
+checkpoint_epoch = 0
+epochs = 50
 
-model.train_model(trainloader, model, loss_fn, optimizer, epochs)
-model.evaluate_model(testloader, model)
+# model.train_model(trainloader, model, loss_fn, optimizer, epochs, checkpoint_epoch)
+model.evaluate_model(testloader, model, epochs)
 

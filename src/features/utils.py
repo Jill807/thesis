@@ -1,21 +1,27 @@
 import os
+import sys
+sys.path.append(os.getcwd())
 import pandas as pd
 from datetime import datetime, timedelta
 import math
+import numpy as np
 
 
 class preprocessing:
-    def __init__(self, image_path, sensor_file_path):
+    def __init__(self, sensor_file_path):
         # Read in sensor data
         self.sensor_data_file = pd.read_csv(sensor_file_path)
 
         # Read in iamge data
-        self.image_file = pd.DataFrame(os.listdir(image_path), columns = ['FileName'])
-        self.image_path = image_path
-        self.image_file['File Path'] = self.image_path + self.image_file['FileName']
+        self.image_file = self.retrieve_images(parent_directory = '/gpfs/scratch1/shared/jgulbis')
+        # self.image_file = pd.DataFrame(os.listdir(image_path), columns = ['FileName'])
+        # self.image_path = '2024-03-12/'
+        # self.image_file['FilePath'] = self.image_path + self.image_file['FileName']
 
         # Read in weather data
-        self.weather_df = self.weather_preprocessing(pd.read_csv(r'WeatherMarch12.txt', delimiter= '\t|,', header = 32))
+        self.weather_df = self.weather_preprocessing(pd.read_csv(r'WeatherMarch01April30.txt', delimiter= '\t|,', header = 32, engine = 'python'))
+        # For a small dataset, comment out above code and rerun with code below:
+        # self.weather_df = self.weather_preprocessing(pd.read_csv(r'WeatherMarch12.txt', delimiter= '\t|,', header = 32, engine = 'python'))
 
 
     def main(self):
@@ -23,45 +29,75 @@ class preprocessing:
         Function to preprocess the dataset and read into parquet file
         """
         # Get matching timestamps between the images and sensor times
-        data = self.match_timestamps()
+        timestamps_df = self.match_timestamps()
         ## --------------------TEMPORARY FILTER ------------------
         # Replace with filter_stations after
-        filtered_df = data[data['station'] == 'NL10644']
+        # filtered_df = data[data['station'] == 'NL10644']
+        filtered_df = self.filter_stations(timestamps_df)
 
         # Cleaned data: remove NaNs. If small then downsize dataset to 20%
-        filtered_df = self.clean_data(filtered_df, small = True)
+        cleaned_df = self.clean_data(filtered_df, small = False)
+        print("CLEANED DF:-----------------------------")
+        print(cleaned_df.columns)
 
         # Get distances from tata steel to the sensors
-        distance_data = self.direction_distance(filtered_df)
+        distance_data = self.direction_distance(cleaned_df)
+        print("processing")
 
         # Merge weather and sensor data
         merge_weather_sensor = self.merge_weather_sensor(distance_data, self.weather_df)
+        print("processing")
         print("Weather sensor", merge_weather_sensor['rounded_datetime'].unique())
 
         # Get the pm2.5 value from the nearest station i.e. the one with the smallest wind direction difference
         nearest_station = self.nearest_station(merge_weather_sensor)
+        print("processing")
 
         # Create t sequences of images
-        sequenced_df = self.sequence_generation(nearest_station, nr_timestamps = 2)
+        sequenced_df = self.sequence_generation(nearest_station, nr_timestamps = 7)
+        print("processing")
         print("Length of sequenced df", len(sequenced_df))
 
         sequenced_df = sequenced_df.drop(columns = ['time', 'date', 'datetime', 'date_sensor', 'time_sensor', 'datetime_weather',
        'date_weather', 'time_weather'])
         sequenced_df = sequenced_df.dropna(axis =0)
         sequenced_df = sequenced_df.reset_index()
+        print("done")
         return sequenced_df
     
-    def filter_stations(self):
+    def retrieve_images(self, parent_directory):
+        
+        folder_paths = [os.path.join(root, d) for root, dirs, _ in os.walk(parent_directory) for d in dirs]
+
+        # Initialize an empty list to store file information
+        file_info = []
+
+        # Iterate over each folder path
+        for folder_path in folder_paths:
+            # Iterate over files and directories in the folder
+            for entry in os.scandir(folder_path):
+                # Check if the entry is a file
+                if entry.is_file():
+                    # Construct the full file path
+                    file_path = os.path.join(folder_path, entry.name)
+                    # Append file information to the list
+                    file_info.append({'FileName': entry.name, 'FilePath': file_path})
+
+        # Create a DataFrame from the list of file information
+        print("Done: RETRIEVED IMAGES")
+        return pd.DataFrame(file_info)
+    
+    def filter_stations(self, df):
         '''
         Keep stations we are interested in
         '''
         other_stations = ['HLL_hl_device_433', 'HLL_hl_device_442','HLL_hl_device_513','HLL_hl_device_237', 'HLL_hl_device_288', 'LTD_52030', 'HLL_hl_device_317', 'HLL_hl_device_452', 'HLL_hl_device_024']
-        filtered_df = self.sensor_data_file[self.sensor_data_file['station'].isin(other_stations)]
-        grouped_df = filtered_df.groupby(['station', 'datetime'])['pm25_kal'].mean().reset_index(name='average_pm_25kal')
-        grouped_df['date'] = filtered_df['datetime'].dt.date
-        grouped_df['time'] = filtered_df['datetime'].dt.time
-        grouped_df['average_pm_25kal'] = grouped_df['average_pm_25kal'].clip(0,150)
-        return grouped_df
+        filtered_df = df[df['station'].isin(other_stations)]
+        # grouped_df = filtered_df.groupby(['station', 'datetime'])['pm25_kal'].mean().reset_index(name='average_pm_25kal')
+        # grouped_df['date'] = filtered_df['datetime'].dt.date
+        # grouped_df['time'] = filtered_df['datetime'].dt.time
+        # grouped_df['average_pm_25kal'] = grouped_df['average_pm_25kal'].clip(0,150)
+        return filtered_df
     
     def match_timestamps(self):
         '''
@@ -70,7 +106,8 @@ class preprocessing:
         '''
 
         ## Make timestamps: Label File
-        self.sensor_data_file['datetime'] = pd.to_datetime(self.sensor_data_file['date'], format='%Y-%m-%d %H:%M:%S')
+        self.sensor_data_file['datetime'] = pd.to_datetime(self.sensor_data_file['date'], format='mixed')
+        print("processing: timestamps")
 
         # Split 'datetime' column into 'date' and 'time' columns
         self.sensor_data_file['date'] = self.sensor_data_file['datetime'].dt.date
@@ -91,7 +128,7 @@ class preprocessing:
 
         # Match on Time Stamp
         self.labelled_data = pd.merge(self.image_file, self.sensor_data_file, how='left', left_on='rounded_datetime', right_on='datetime',  suffixes=('', '_sensor'))
-        
+        print("Done: MATCH TIMESTAMPS")
         return self.labelled_data        
 
     
@@ -112,7 +149,7 @@ class preprocessing:
         # Keep the columns that I need
 
         data = data.drop(columns = ['wd', 'ws', 'temp', 'rh', 'pm10', 'pm10_kal', 'pm25_kal'])
-        # columns_to_keep = ['File Path', 'pm25', 'timestamp', 'rounded_datetime', 'FileName', 'datetime', 'station', 'lat', 'lon']
+        # columns_to_keep = ['FilePath', 'pm25', 'timestamp', 'rounded_datetime', 'FileName', 'datetime', 'station', 'lat', 'lon']
         # data = data[columns_to_keep]
         # Change timestamp to datetime column
         ## If I want a very small sample to train on I will take 20% of the data
@@ -125,46 +162,52 @@ class preprocessing:
         """
         """
         data = data.sort_values(by = 'timestamp')
-        data['frame_sequence'] = data['File Path']
+        data['frame_sequence'] = data['FilePath']
         for i in range(1,nr_timestamps+1):
-            data[f't-{i}'] = data['File Path'].shift(i)
+            data[f't-{i}'] = data['FilePath'].shift(i)
             data['frame_sequence'] += " " + data[f't-{i}'] 
         data['frame_sequence'] = data['frame_sequence'].apply(lambda x: x.split() if isinstance(x, str) else pd.NA)
         return data 
     
     def direction_distance(self, sensor_df):
         """
+        Create Distance and Direction features from Tata Steel to the sensors
         """
-        # Create Distance and Direction features from Tata Steel to the sensors
-        sensor_df['distance'] = 0
-        sensor_df['direction'] = 0
+        print("processing: Direction distance")
+        # Store tata lat and long
         sensor_df['tata_lat'] = 52.480234
         sensor_df['tata_lon'] = 4.607623
 
-        # Coordinates of the point
-        # point_x = 52.480234
-        # point_y = 4.607623
-
         # Function to calculate the distance between two points
         def calculate_distance(sensor_x, sensor_y, point_x, point_y):
-            return math.sqrt((sensor_x - point_x)**2 + (sensor_y - point_y)**2)
+            print("Dtype", sensor_x.dtype)
+            print("Dtype", point_x.dtype)
+            return np.sqrt((sensor_x - point_x)**2 + (sensor_y - point_y)**2)
 
         # Function to calculate the angle between two points
         def calculate_angle(sensor_x, sensor_y, point_x, point_y):
-            if math.degrees(math.atan2(sensor_y - point_y, sensor_x - point_x)) <0:
-                return 360 + math.degrees(math.atan2(sensor_y - point_y, sensor_x - point_x))
-            else:
-                return math.degrees(math.atan2(sensor_y - point_y, sensor_x - point_x))
+            angles = np.degrees(np.arctan2(sensor_y - point_y, sensor_x - point_x))
+            angles[angles < 0] += 360  # Adjust negative angles
+            return angles
+            
+        # Sensor coordinates
+        sensor_coordinates= sensor_df[['lat', 'lon']].values # lat and lon of the sensors
+        lat = sensor_coordinates[:,0]
+        lon = sensor_coordinates[:,1]
 
-        for index, row in sensor_df.iterrows():
-            lat1, lon1 = row[['lat', 'lon']].astype(float) # lat and lon of the sensors
-            lat2, lon2 = row[['tata_lat', 'tata_lon']].astype(float)  # lat and lon of Tata Steel 
+        # Tata coordinates
+        tata_coordinates = sensor_df[['tata_lat', 'tata_lon']].values  # lat and lon of Tata Steel 
+        tata_lat = tata_coordinates[:,0]
+        tata_lon = tata_coordinates[:,1]
 
-            # Calculate distance and direction
-            distance = calculate_distance(lat1, lon1, lat2, lon2)
-            direction = calculate_angle(lat1, lon1, lat2, lon2)
-            sensor_df.loc[index, 'distance'] = distance
-            sensor_df.loc[index,'direction'] = direction
+        # Calculate distance and direction
+        distance = calculate_distance(lat, lon, tata_lat, tata_lon)
+        direction = calculate_angle(lat, lon, tata_lat, tata_lon)
+
+        # Store in dataframe
+        sensor_df['distance'] = distance
+        sensor_df['direction'] = direction
+        print("Done: DIRECTION DISTANCE")
         return sensor_df
     
     def weather_preprocessing(self, weather_df):
@@ -265,6 +308,8 @@ class preprocessing:
         wind_direction['direction_difference'] = abs(wind_direction['DD'].astype(float)- wind_direction['direction'])
 
         idx_min_direction = wind_direction.groupby(['rounded_datetime'])['direction'].idxmin()
+        print(idx_min_direction)
+
 
         # Select the rows with the smallest direction difference for each unique date and time
         result = wind_direction.loc[idx_min_direction]
@@ -273,13 +318,13 @@ class preprocessing:
         return result.reset_index()
     
 # print(pd.read_csv('DataEarly2023.csv'))
-pp = preprocessing('2024-03-12/', '12032024_sensor.csv')
-
+pp = preprocessing('VelsenMarch01April30.csv')
 labelled_data = pp.main()
-print(labelled_data.columns)
-labelled_data['timestamp'] = pd.to_datetime(labelled_data['timestamp'], format='%H:%M:%S')
 labelled_data.to_parquet('output_file.parquet', engine='fastparquet')
-print(labelled_data[['FileName', 'rounded_datetime', 'timestamp', 'pm25', 'direction_difference', 'frame_sequence']])
-# sequenced = pp.sequence_generation(labelled_data)
-print(labelled_data['frame_sequence'][2])
+with open("dataset_info.txt", "a") as f:
+    print("Dataset columns", labelled_data.columns, file = f)
+    print("-----------------Dataset------------------", file = f)
+    print(labelled_data[['FileName', 'rounded_datetime', 'timestamp', 'pm25', 'direction_difference', 'frame_sequence']], file = f)
+    print("Datasize shape:", labelled_data.shape, file = f)
+    print("Frame sequence", labelled_data['frame_sequence'][2], file = f)
 
