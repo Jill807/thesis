@@ -47,11 +47,11 @@ class CNN_WEATHER(nn.Module):
             batch_first=True)
         # print(self.)
         # Fully connected layers with one output for regression
-        print("INPUT DIM + 4", input_dim+4)
-        self.fc1 = nn.Linear(input_dim +4, 256)
-        self.fc2 = nn.Linear(256,128)
-        self.fc3 = nn.Linear(128,32)
-        self.fc4 = nn.Linear(32,1)
+        print("INPUT DIM + 6", input_dim+6)
+        self.fc1 = nn.Linear(input_dim+6, 32)
+        self.fc2 = nn.Linear(32,1)
+        # self.fc3 = nn.Linear(128,32)
+        # self.fc4 = nn.Linear(32,1)
 
         # If regression is true, then we change the forward pass
         self.regression = regression
@@ -73,21 +73,18 @@ class CNN_WEATHER(nn.Module):
                 frame_feature = frame_feature.view(-1, 25088)
                 # print(frame_feature.shape)
                 frameFeatures[:, t, :] = frame_feature
+
         last_timestep = frameFeatures[:,-1,:]
-        last_feature = features[:,-1,:]
 
         # Decode hidden state of last time step
-        r_out = torch.cat((last_feature, last_timestep), dim = 1)
+        c_out = torch.cat((features, last_timestep), dim = 1)
 
         # Fully connected layers
-        f1_out = F.relu(self.fc1(r_out))
+        f1_out = F.relu(self.fc1(c_out))
         f2_out = F.relu(self.fc2(f1_out))
-        f3_out = F.relu(self.fc3(f2_out))
-
-        f4_out = self.fc4(f3_out)
 
 
-        return f4_out.squeeze()
+        return f2_out.squeeze()
 
  
     def train_model(self, trainloader, validationloader, model, optimizer, num_epochs, checkpoint_epoch):
@@ -108,7 +105,7 @@ class CNN_WEATHER(nn.Module):
             Number of epochs for training the model.
         """
         model.train(True)
-        output_file = "only_cnn/losses_weather.txt"
+        output_file = "only_cnn/epoch_loss.txt"
 
         best_vloss = 100000.0
 
@@ -117,6 +114,7 @@ class CNN_WEATHER(nn.Module):
             print("Epoch:", epoch)
             running_loss = 0.0
             last_loss = 0.0
+            n_batches = len(trainloader)
             score_arrays= [] # add the field for appending the loss
             for i, data in enumerate(trainloader, 0):
                 print("----------------------------------")
@@ -132,62 +130,67 @@ class CNN_WEATHER(nn.Module):
 
                 # forward + backward + optimize
                 outputs = model(inputs, features)
-                print("Output size:", outputs.size())
+                # print("Output size:",x outputs.size())
                 # print("Outputs:", outputs, labels.dtype)
                 loss = self.weighted_loss(outputs, labels)
                 print("Loss:", loss)
                 loss.backward()
                 optimizer.step()
-                self.score_arrays.append(loss.item()) # append the loss
 
 
                 running_loss += loss.item()
                 if i % 10 == 0:    # print every 100 mini-batches
-                    last_loss = running_loss / 100
+                    last_loss = running_loss / 10
                     print('  batch {} loss: {}'.format(i + 1, last_loss))
                     # print('[%d, %5d] loss: %.3f' %
                         # (epoch + 1, i + 1, running_loss / 100))
+                self.score_arrays.append(last_loss) # append the loss
 
-                # PER EPOCH
-                self.checkpoint(model, f"epoch_onlycnn/epoch-{epoch}.pth")
+                # print statistics
+                with open("only_cnn/minibatch_losses.txt", "a") as f:
+                    f.write(f"Epoch {epoch + 1}, Minibatch: {i} Loss: {loss}\n")  # Writing each loss value on a separate line
+            # PER EPOCH
+            self.checkpoint(model, f"epoch_onlycnn/epoch-{epoch}.pth")
 
-                running_vloss = 0.0
-                # Set the model to evaluation mode, disabling dropout and using population
-                # statistics for batch normalization.
-                model.eval()
+            print("Epoch loss:", running_loss/n_batches)
 
-            # Disable gradient computation and reduce memory consumption.
-                with torch.no_grad():
-                    for i, vdata in enumerate(validationloader):
-                        vinputs, vfeatures, vlabels = vdata
-                        vinputs = vinputs.to(device)
-                        vfeatures = vfeatures.to(device)
-                        vlabels = vlabels.to(device)
-                        voutputs = model(vinputs, vfeatures)
-                        vloss = self.weighted_loss(voutputs, vlabels)
-                        running_vloss += vloss
+            running_vloss = 0.0
+            # Set the model to evaluation mode, disabling dropout and using population
+            # statistics for batch normalization.
+            model.eval()
 
-                avg_vloss = running_vloss / (i + 1)
-                print('LOSS trainingL {} || valididation: {}'.format(last_loss, avg_vloss))
+        # Disable gradient computation and reduce memory consumption.
+            with torch.no_grad():
+                for i, vdata in enumerate(validationloader):
+                    vinputs, vfeatures, vlabels = vdata
+                    vinputs = vinputs.to(device)
+                    vfeatures = vfeatures.to(device)
+                    vlabels = vlabels.to(device)
+                    voutputs = model(vinputs, vfeatures)
+                    vloss = self.weighted_loss(voutputs, vlabels)
+                    running_vloss += vloss
 
-            # Log the running loss averaged per batch
-            # for both training and validation
-            # writer.add_scalars('Training vs. Validation Loss',
-            #                 { 'Training' : last_loss, 'Validation' : avg_vloss },
-            #                 epoch_number + 1)
-            # writer.flush()
+            avg_vloss = running_vloss / (i + 1)
+            print('LOSS training: {} || valididation: {}'.format(last_loss, avg_vloss))
 
-            # Track best performance, and save the model's state
+        # Log the running loss averaged per batch
+        # for both training and validation
+        # writer.add_scalars('Training vs. Validation Loss',
+        #                 { 'Training' : last_loss, 'Validation' : avg_vloss },
+        #                 epoch_number + 1)
+        # writer.flush()
 
-                if avg_vloss < best_vloss:
-                    best_vloss = avg_vloss
-                    model_path = "epoch_onlycnn/epoch-0.pth"
-                    # model_path = 'model_{}_{}'.format(timestamp, epoch_number)
-                    torch.save(model.state_dict(), model_path)
-                                # print statistics
-                
-                with open(output_file, "a") as f:
-                    f.write(f"Epoch {epoch + 1}, Loss: {loss}\n", "Valid loss:", best_vloss)  # Writing each loss value on a separate line
+        # Track best performance, and save the model's state
+
+            if avg_vloss < best_vloss:
+                best_vloss = avg_vloss
+                model_path = f"epoch_onlycnn/epoch-{epoch}.pth"
+                # model_path = 'model_{}_{}'.format(timestamp, epoch_number)
+                torch.save(model.state_dict(), model_path)
+                            # print statistics
+            
+            with open(output_file, "a") as f:
+                f.write(f"---------------\n Epoch {epoch + 1}, Training loss: {running_loss/n_batches} Valid loss: {best_vloss} \n")  # Writing each loss value on a separate line
 
     
     def evaluate_model(self, dataloader, model, num_epochs):
@@ -264,19 +267,19 @@ class CNN_WEATHER(nn.Module):
 
         # # Add labels and title
         # plt.title('MSE and MAE Over Epochs')
-        # plt.xlabel('Epochs')
+        # plt.xlabel('Minibatch')
         # plt.ylabel('Loss')
         # plt.legend()
         # plt.grid(True)
         # name = 'weighted_loss.png'
-        # plt.savefig('weighted/'+name)
+        # plt.savefig('only_cnn/'+name)
         # print(f"{name} plot updated")
         # plt.show()
         print("LEN SCORE ARRAYS", len(self.score_arrays))
         #-----------------PRINT SCORE ARRAY LOSS --------------------
         plt.plot(range(1, len(self.score_arrays)+1), self.score_arrays)
         plt.title('Loss over epochs')
-        plt.xlabel('Epochs')
+        plt.xlabel('Minibatch')
         plt.ylabel('Loss')
         plt.savefig("only_cnn/only_cnn_loss_plot.png")
         plt.show()
@@ -348,11 +351,11 @@ test_sampler = torch.utils.data.SequentialSampler(test_set)
 # train_set[0][0].size()
 
 # Load data
-trainloader = DataLoader(cD, batch_size=16,
+trainloader = DataLoader(cD, batch_size=64,
                         shuffle=False, num_workers=0, sampler = train_sampler)
-validationloader = DataLoader(cD, batch_size=16,
+validationloader = DataLoader(cD, batch_size=64,
                         shuffle=False, num_workers=0, sampler = val_sampler)
-testloader = DataLoader(cD, batch_size=16,
+testloader = DataLoader(cD, batch_size=64,
                         shuffle=False, num_workers=0, sampler = test_sampler)
 
 print("Success with dataloading")
@@ -361,7 +364,7 @@ model = CNN_WEATHER(512*7*7 , 2, 1, regression = regression).to(device)
 print("MODEL", model)
 
  #Define the path to the saved model state dictionary
-path_to_saved_model = "epoch_onlycnn/epoch-0.pth"  # Replace with the actual path to your saved model
+# path_to_saved_model = "epoch_onlycnn/epoch-2.pth"  # Replace with the actual path to your saved model
 
 # Load the model state dictionary
 # checkpoint = torch.load(path_to_saved_model, map_location=torch.device('cpu'))
@@ -376,7 +379,7 @@ model = model.to(device)
 learning_rate = 1e-5
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 checkpoint_epoch = 0
-epochs = 30
+epochs = 8
 
 model.train_model(trainloader, validationloader, model, optimizer, epochs, checkpoint_epoch)
 model.evaluate_model(testloader, model, epochs)

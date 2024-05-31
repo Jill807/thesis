@@ -36,7 +36,7 @@ class createWeatherDataset(torch.utils.data.Dataset):
         # self.data = self.pp.main()
 
         # self.data = pd.read_parquet('labelled_dataset2.parquet', engine = 'fastparquet')
-        self.data = pd.read_parquet('labelled_dataset2.parquet', engine = 'fastparquet')
+        self.data = pd.read_parquet('src/data/time_dataset_LARGE.parquet', engine = 'fastparquet')
 
 
     def __len__(self):
@@ -49,18 +49,15 @@ class createWeatherDataset(torch.utils.data.Dataset):
         img_paths = self.data.loc[idx, 'frame_sequence']
         # img_paths = ast.literal_eval(img_paths.decode('utf-8'))
 
-        FH = torch.tensor(self.data.loc[idx, 'FH_sequence'], dtype = torch.float32)
-        SQ = torch.tensor(self.data.loc[idx, 'SQ_sequence'], dtype = torch.float32)
-        Q = torch.tensor(self.data.loc[idx, 'Q_sequence'], dtype = torch.float32)
-        FX = torch.tensor(self.data.loc[idx, 'FX_sequence'], dtype = torch.float32) 
+        FH = torch.tensor(self.data.loc[idx, 'FH'], dtype = torch.float32)
+        SQ = torch.tensor(self.data.loc[idx, 'SQ'], dtype = torch.float32)
+        Q = torch.tensor(self.data.loc[idx, 'Q'], dtype = torch.float32)
+        FX = torch.tensor(self.data.loc[idx, 'FX'], dtype = torch.float32) 
+        SIN_HOUR = torch.tensor(self.data.loc[idx, 'hour_sin'], dtype = torch.float32)
+        COS_HOUR = torch.tensor(self.data.loc[idx, 'hour_cos'], dtype = torch.float32)
 
-        weatherfeatures = torch.stack((FH,SQ,Q,FX), dim = 0)
-        weatherfeatures = weatherfeatures.view(8,4)
-        # weatherfeatures = weatherfeatures.unsqueeze(dim = 2)
-        # print(weatherfeatures.shape)
-        # weather_features = self.data.loc[idx, ['FH_sequence', 'SQ_sequence', 'Q_sequence', 'FX_sequence']]
-        
-        # print(weatherfeatures)
+        weatherfeatures = torch.stack((FH,SQ,Q,FX, SIN_HOUR, COS_HOUR), dim = 0)
+
         # Retrieve image path and labels
         if self.regression:
             label = self.data.loc[idx, 'pm25']
