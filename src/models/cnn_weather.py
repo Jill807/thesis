@@ -39,22 +39,22 @@ class CNN_WEATHER(nn.Module):
         self.H = hidden_dim
         self.L = layer_dim
 
-        # LSTM model
-        self.rnn = nn.LSTM(
-            input_size=input_dim,
-            hidden_size=hidden_dim,
-            num_layers=layer_dim,
-            batch_first=True)
-        # print(self.)
+        # LSTM model: Not relevant in this model!!
+
+        # self.rnn = nn.LSTM(
+        #     input_size=input_dim,
+        #     hidden_size=hidden_dim,
+        #     num_layers=layer_dim,
+        #     batch_first=True)
+
+
         # Fully connected layers with one output for regression
+        # 6 additional input dimensions: 4 weather features 2 time encoded features
         print("INPUT DIM + 6", input_dim+6)
         self.fc1 = nn.Linear(input_dim+6, 32)
         self.fc2 = nn.Linear(32,1)
         # self.fc3 = nn.Linear(128,32)
         # self.fc4 = nn.Linear(32,1)
-
-        # If regression is true, then we change the forward pass
-        self.regression = regression
 
         self.score_arrays = []
 
@@ -63,9 +63,11 @@ class CNN_WEATHER(nn.Module):
         with torch.no_grad():
             # Extract dimensions of x
             batch_size, timesteps, C, H, W = x.size()
+            #Initialise empty torch matrix
             frameFeatures = torch.empty(size=(batch_size, timesteps, 512*7*7)).to(device)
 
-
+            # This step is only important for the LSTM. It creates a stack of t timesteps
+            # In this case it is not needed.
             for t in range(0, x.size()[1]):
                 frame = x[:, t, :, :, :]
                 frame_feature = self.features(frame)
@@ -74,6 +76,7 @@ class CNN_WEATHER(nn.Module):
                 # print(frame_feature.shape)
                 frameFeatures[:, t, :] = frame_feature
 
+        # Get last timestep for fully connected layer (only relevant when using LSTM)
         last_timestep = frameFeatures[:,-1,:]
 
         # Decode hidden state of last time step
@@ -83,7 +86,7 @@ class CNN_WEATHER(nn.Module):
         f1_out = F.relu(self.fc1(c_out))
         f2_out = F.relu(self.fc2(f1_out))
 
-
+        # Squeeze output for prediction with y_true
         return f2_out.squeeze()
 
  
@@ -93,34 +96,34 @@ class CNN_WEATHER(nn.Module):
 
         Parameters
         ----------
-        dataloader : torch.utils.data.DataLoader
-            The dataloader object.
-        model : torch.nn.Module
-            The PyTorch model that we want to train.
-        loss_fn : torch.nn.modules.loss._Loss
-            The loss function.
-        optimizer : torch.optim.Optimizer
-            The optimization algorithm.
-        num_epochs : int
-            Number of epochs for training the model.
+        trainloader and validationloader: split dataset in train and val set 
+        model : CNN with two fully connected layers
+        optimizer : Adam
+        num_epochs : number of epochs to train by
+        checkpoint_epoch: if there's a checkpoint, train from there
         """
+        # Set training to true
         model.train(True)
-        output_file = "only_cnn/epoch_loss.txt"
-
+        # Store the epoch losses in a list for plotting
+        self.epoch_loss = []
+        # Best validation loss
         best_vloss = 100000.0
 
 
         for epoch in range(checkpoint_epoch, num_epochs):  # loop over the dataset multiple times
             print("Epoch:", epoch)
+            # Initialise losses
             running_loss = 0.0
             last_loss = 0.0
+            # Number of batches per epoch
             n_batches = len(trainloader)
             score_arrays= [] # add the field for appending the loss
             for i, data in enumerate(trainloader, 0):
                 print("----------------------------------")
                 print("Minibatch:", i)
-                # get the inputs; data is a list of [inputs, labels]
+                # get the inputs, features and labels
                 inputs, features, labels = data
+                # Read them to device [cpu, gpu]
                 inputs = inputs.to(device)
                 features = features.to(device)
                 labels = labels.to(device)
@@ -130,66 +133,61 @@ class CNN_WEATHER(nn.Module):
 
                 # forward + backward + optimize
                 outputs = model(inputs, features)
-                # print("Output size:",x outputs.size())
-                # print("Outputs:", outputs, labels.dtype)
                 loss = self.weighted_loss(outputs, labels)
-                print("Loss:", loss)
                 loss.backward()
                 optimizer.step()
+                print("Loss:", loss)
 
-
+                # Add loss to running loss per epoch
                 running_loss += loss.item()
-                if i % 10 == 0:    # print every 100 mini-batches
+                if i % 10 == 0:    # print every 10 mini-batches
                     last_loss = running_loss / 10
                     print('  batch {} loss: {}'.format(i + 1, last_loss))
-                    # print('[%d, %5d] loss: %.3f' %
-                        # (epoch + 1, i + 1, running_loss / 100))
                 self.score_arrays.append(last_loss) # append the loss
 
-                # print statistics
+                # Print statistics
                 with open("only_cnn/minibatch_losses.txt", "a") as f:
                     f.write(f"Epoch {epoch + 1}, Minibatch: {i} Loss: {loss}\n")  # Writing each loss value on a separate line
+
             # PER EPOCH
+            # Add checkpoint
             self.checkpoint(model, f"epoch_onlycnn/epoch-{epoch}.pth")
 
+            # Print loss per epoch and store result
             print("Epoch loss:", running_loss/n_batches)
+            self.epoch_loss.append(running_loss/n_batches) 
 
-            running_vloss = 0.0
-            # Set the model to evaluation mode, disabling dropout and using population
-            # statistics for batch normalization.
+            # Set the model to evaluation mode
             model.eval()
-
-        # Disable gradient computation and reduce memory consumption.
+            running_vloss = 0.0
             with torch.no_grad():
                 for i, vdata in enumerate(validationloader):
+                    # Read in data
                     vinputs, vfeatures, vlabels = vdata
+                    # Put to device
                     vinputs = vinputs.to(device)
                     vfeatures = vfeatures.to(device)
                     vlabels = vlabels.to(device)
+                    # Predict output
                     voutputs = model(vinputs, vfeatures)
+                    # Calculate loss
                     vloss = self.weighted_loss(voutputs, vlabels)
+                    # Append to runningvloss
                     running_vloss += vloss
-
+            #Print vloss
             avg_vloss = running_vloss / (i + 1)
-            print('LOSS training: {} || valididation: {}'.format(last_loss, avg_vloss))
+            print(f"Epoch {epoch + 1}, Training loss: {running_loss/n_batches} Valid loss: {best_vloss} \n")
 
-        # Log the running loss averaged per batch
-        # for both training and validation
-        # writer.add_scalars('Training vs. Validation Loss',
-        #                 { 'Training' : last_loss, 'Validation' : avg_vloss },
-        #                 epoch_number + 1)
-        # writer.flush()
-
-        # Track best performance, and save the model's state
-
+            # Track best performance, and save the model's state
             if avg_vloss < best_vloss:
                 best_vloss = avg_vloss
-                model_path = f"epoch_onlycnn/epoch-{epoch}.pth"
+                # model_path = f"epoch_onlycnn/epoch-{epoch}.pth"
                 # model_path = 'model_{}_{}'.format(timestamp, epoch_number)
-                torch.save(model.state_dict(), model_path)
+                # torch.save(model.state_dict(), model_path)
                             # print statistics
-            
-            with open(output_file, "a") as f:
+
+            # Write final statistics to loss txt file
+            with open("only_cnn/epoch_loss.txt", "a") as f:
                 f.write(f"---------------\n Epoch {epoch + 1}, Training loss: {running_loss/n_batches} Valid loss: {best_vloss} \n")  # Writing each loss value on a separate line
 
     
@@ -199,13 +197,13 @@ class CNN_WEATHER(nn.Module):
 
         Parameters
         ----------
-        dataloader : torch.utils.data.DataLoader
-            The dataloader object.
-        model : torch.nn.Module
-            The PyTorch model that we want to evaluate.
+        dataloader : testd data
+        model : CNN
         """
-        model.eval() # set the model to evaluation mode
+        model.eval()
+        # Initialise torch R2Score class
         r2score = R2Score().to(device)
+        # Initialise arrays
         y_predlist = []
         ylist = []
         # Since we do not want to train the model, make sure that we deactivate the gradients
@@ -236,10 +234,11 @@ class CNN_WEATHER(nn.Module):
                 metrics['mse'].append(mse)
                 metrics['mae'].append(mae)
                 metrics['rmse'].append(rmse)
-                                
+            # Change to tensor    
             y_pred_tensor = torch.cat(y_predlist, dim=0)
             y_tensor = torch.cat(ylist, dim=0)
 
+            # Calculate scores
             r2 = r2score(y_pred_tensor, y_tensor)
             metrics['r2'].append(r2)
 
@@ -277,27 +276,37 @@ class CNN_WEATHER(nn.Module):
         # plt.show()
         print("LEN SCORE ARRAYS", len(self.score_arrays))
         #-----------------PRINT SCORE ARRAY LOSS --------------------
-        plt.plot(range(1, len(self.score_arrays)+1), self.score_arrays)
+        plt.plot(range(1, len(self.epoch_loss)+1), self.epoch_loss)
         plt.title('Loss over epochs')
-        plt.xlabel('Minibatch')
+        plt.xlabel('Epoch')
         plt.ylabel('Loss')
         plt.savefig("only_cnn/only_cnn_loss_plot.png")
         plt.show()
 
         
     def checkpoint(self, model, filename):
+        """
+        Retrieves checkpoints of epochs
+        """
         torch.save({
             'optimizer': optimizer.state_dict(),
             'model': model.state_dict(),
         }, filename)
     
     def resume(self, model, filename): 
+        """
+        Resumes checkpoint of epochs
+        """
         checkpoint = torch.load(filename)
         model.load_state_dict(checkpoint['model'])
         optimizer.load_state_dict(checkpoint['optimizer'])
 
     def weighted_loss(self, output, target):
         """
+        Custom loss function which uses histogram smoothing class to give
+        weights to certain bins of the target distribution.
+        High PM2.5: More weight
+        Low PM2.5: Lower weight
         """
         output_cpu = output.cpu().detach().numpy()
 
@@ -351,11 +360,11 @@ test_sampler = torch.utils.data.SequentialSampler(test_set)
 # train_set[0][0].size()
 
 # Load data
-trainloader = DataLoader(cD, batch_size=64,
+trainloader = DataLoader(cD, batch_size=32,
                         shuffle=False, num_workers=0, sampler = train_sampler)
-validationloader = DataLoader(cD, batch_size=64,
+validationloader = DataLoader(cD, batch_size=32,
                         shuffle=False, num_workers=0, sampler = val_sampler)
-testloader = DataLoader(cD, batch_size=64,
+testloader = DataLoader(cD, batch_size=32,
                         shuffle=False, num_workers=0, sampler = test_sampler)
 
 print("Success with dataloading")
@@ -364,7 +373,7 @@ model = CNN_WEATHER(512*7*7 , 2, 1, regression = regression).to(device)
 print("MODEL", model)
 
  #Define the path to the saved model state dictionary
-# path_to_saved_model = "epoch_onlycnn/epoch-2.pth"  # Replace with the actual path to your saved model
+# path_to_saved_model = "epoch_onlycnn/epoch-24.pth"
 
 # Load the model state dictionary
 # checkpoint = torch.load(path_to_saved_model, map_location=torch.device('cpu'))
@@ -378,8 +387,8 @@ model = model.to(device)
 
 learning_rate = 1e-5
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-checkpoint_epoch = 0
-epochs = 8
+checkpoint_epoch = 24
+epochs = 25
 
 model.train_model(trainloader, validationloader, model, optimizer, epochs, checkpoint_epoch)
 model.evaluate_model(testloader, model, epochs)
