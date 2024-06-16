@@ -127,13 +127,15 @@ class weighted_lstm_model(nn.Module):
 
         # Generate metrics
         test_rmse = np.sqrt(self.weighted_loss(pred_test, test_y, test_w).detach().numpy())      
-        test_mae  = self.weighted_loss(pred_test, test_y, test_w).detach().numpy()
-        test_mse = self.weighted_loss(pred_test, test_y, test_w)
-        test_r2 = self.weighted_r2(test_mse, test_y, test_w)
+        test_mae  = nn.L1Loss(pred_test, test_y, test_w).detach().numpy()
+        test_mse  = self.weighted_loss(pred_test, test_y, test_w)
+        test_r2   = self.weighted_r2(test_mse, test_y, test_w)
 
         # Print metrics
         print("-"*40)
         print(f"Weighted: test RMSE {test_rmse}, test MAE {test_mae}, test R2 {test_r2}")
+        with open("src/data/metrics.txt", "a") as f:
+            f.write(f"Weighted: test RMSE {test_rmse}, test MAE {test_mae}, test R2 {test_r2}\n")
 
         return np.sqrt(test_rmse), test_mae, test_r2
     

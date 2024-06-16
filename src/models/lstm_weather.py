@@ -124,12 +124,14 @@ class lstm_model(nn.Module):
 
         # Generate metrics
         test_rmse = np.sqrt(loss_fn(y_pred, test_y).detach().numpy())      
-        test_mae  = loss_fn(y_pred, test_y).detach().numpy()
+        test_mae  = nn.L1Loss(y_pred, test_y).detach().numpy()
         test_r2  = r2score(y_pred, test_y)
 
         # Print metrics
         print("-"*40)
-        print(f"test RMSE {test_rmse}, test MAE {test_mae}, test R2 {test_r2}")
+        print(f"Weather: test RMSE {test_rmse}, test MAE {test_mae}, test R2 {test_r2}")
+        with open("src/data/metrics.txt", "a") as f:
+            f.write(f"Weather: test RMSE {test_rmse}, test MAE {test_mae}, test R2 {test_r2}\n")
     
     def early_stopping(self, train_loss, best_train_loss, patience, min_delta = 0.01):
           # Early stopping check
@@ -262,7 +264,7 @@ plt.xlabel("Epoch")
 plt.ylabel("R Squared")
 plt.legend()
 plt.grid()
-plt.savefig("src/visualisations/TrainingAndValidationLoss.png")
+plt.savefig("src/visualisations/Weather_TrainingAndValidationLoss.png")
 fig.show()
 
 
